@@ -1,4 +1,9 @@
 .idea/
-target/
-results/
 *.iml
+*.ipr
+*.iws
+target/
+bin/
+results/
+*.jar
+*~
