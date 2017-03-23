@@ -2,7 +2,10 @@ package org.gamarasinghe.pretest.beam.examples;
 
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
-import org.apache.beam.sdk.options.*;
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.transforms.windowing.*;
 import org.apache.beam.sdk.values.KV;
@@ -24,13 +27,13 @@ public class TwitterWordCount {
      */
     public interface TwitterWordCountOptions extends PipelineOptions {
         @Description("Path of the file to read from")
-        @Default.String("/home/gayashan/projects/research/twitterwordcountbeam/src/main/resources/dataset2_medium.csv")
+        @Default.String("/home/gayashan/projects/research/twitterwordcountbeam/src/main/resources/dataset2_small.csv")
         String getInputFile();
 
         void setInputFile(String value);
 
         @Description("Path of the file to write to")
-        @Default.String("results/twitter-wordcount-output")
+        @Default.String("results/twitter-wordcount-output.txt")
         String getOutputFile();
 
         void setOutputFile(String value);
@@ -53,32 +56,36 @@ public class TwitterWordCount {
         // 4. Tokenize tweets in to words
         // 5. Apply windowing to the stream and add an event time based trigger
         // 6. Count the words based on each window (results in a key-value pair of word-count)
-        // 7. Format the output per each word-count to be printed/displayed.
+        // 7. Combine the counts per key per window
+        // 8. Format the output per each word-count to be printed/displayed.
         PCollection<String> twitterStream = pipeline
-                .apply("ReadTweetsAndTimestamps", TextIO.Read.from(inputFile))
+                .apply("Read Tweets And Timestamps", TextIO.Read.from(inputFile))
                 .apply("Set event time and extract tweets", ParDo.of(new SetTimestampAndExtractTextFn()))
                 .apply("Tokenize Tweets Into Words", ParDo.of(new ExtractWords()))
                 .apply("Apply Windowing And Triggers",
-                        Window.<String>into(FixedWindows.of(Duration.standardMinutes(10)))
+                        Window.<String>into(FixedWindows.of(Duration.standardMinutes(2)))
                                 .triggering(AfterWatermark.pastEndOfWindow()
                                         .withEarlyFirings(AfterProcessingTime.pastFirstElementInPane()
-                                                .plusDelayOf(Duration.standardMinutes(3)))
+                                                .plusDelayOf(Duration.standardMinutes(1)))
                                         .withLateFirings(AfterPane.elementCountAtLeast(1)))
-                                .withAllowedLateness(Duration.standardMinutes(4))
-                                .accumulatingFiredPanes())
+                                .withAllowedLateness(Duration.standardMinutes(5))
+                                .discardingFiredPanes())
                 .apply("Get Word count", Count.<String>perElement())
-                .apply("Create Window to wordcount mapping", ParDo.of(new SetWordcountWindowMap()))
-                .apply("Groupby key in each window", GroupByKey.<IntervalWindow, KV<String, Long>>create())
+                .apply("Group by key and Combine the counts per window",
+                        Combine.<String, Long, Long>perKey(Sum.ofLongs()))
                 .apply("Format wordcount per window to String", ParDo.of(new FormatWordcountPerWindow()));
 
-        // 8. Write the results to file(s)
+        // 9. Write the results to file(s)
         twitterStream.apply("Write results to text file(s)", TextIO.Write.to(outputFile));
 
-        // 9. Execute the pipeline that you have constructed
+        // Execute the pipeline that you have constructed
         pipeline.run();
     }
 
-
+    /**
+     * Extract the timestamp from the csv file and assign it to each event
+     * And extract the tweets from the file and emit it as the content of the event
+     */
     private static class SetTimestampAndExtractTextFn extends DoFn<String, String> {
         @ProcessElement
         public void processElement(ProcessContext context) {
@@ -98,6 +105,9 @@ public class TwitterWordCount {
         }
     }
 
+    /**
+     * Tokenize the tweet stream in to words
+     */
     private static class ExtractWords extends DoFn<String, String> {
         @ProcessElement
         public void processElement(ProcessContext context) {
@@ -110,32 +120,32 @@ public class TwitterWordCount {
     }
 
     /**
-     *
+     * Format the wordcount key values in to printable string
      */
-    private static class SimpleKeyValueFormatter extends SimpleFunction<KV<String, Long>, String> {
-        @Override
-        public String apply(KV<String, Long> input) {
-            String result = input.getKey() + ":" + input.getValue();
-            System.out.println(result);
-            return result;
-        }
-    }
-
-    private static class FormatWordcountPerWindow extends DoFn<KV<IntervalWindow, Iterable<KV<String, Long>>>, String> {
+    private static class FormatWordcountPerWindow extends DoFn<KV<String, Long>, String> {
         @ProcessElement
         public void processElement(ProcessContext context) {
-            System.out.println(context.element());
-            for (KV<String, Long> wordcount : context.element().getValue()) {
-                String wordcountOutput = wordcount.getKey() + ":" + wordcount.getValue();
-                context.output(wordcountOutput);
-            }
+            String result = context.element().getKey() + ":" + context.element().getValue();
+            System.out.println(result);
+            context.output(result);
         }
     }
 
-    private static class SetWordcountWindowMap extends DoFn<KV<String, Long>, KV<IntervalWindow, KV<String, Long>>> {
+    private static class SetWordcountWindowMap extends DoFn<KV<String, Long>, KV<String, Long>> {
         @ProcessElement
-        public void processElement(ProcessContext context, IntervalWindow window) {
-            context.output(KV.of(window, context.element()));
+        public void processElement(ProcessContext context) {
+            context.output(KV.of(context.element().getKey(), context.element().getValue()));
+        }
+    }
+
+    private static class TotalWordCount implements SerializableFunction<Iterable<Long>, Long> {
+        @Override
+        public Long apply(Iterable<Long> input) {
+            Long sum = 0L;
+            for (Long count : input) {
+                sum += count;
+            }
+            return sum;
         }
     }
 }
