@@ -63,7 +63,7 @@ public class TwitterWordCount {
                 .apply("Set event time and extract tweets", ParDo.of(new SetTimestampAndExtractTextFn()))
                 .apply("Tokenize Tweets Into Words", ParDo.of(new ExtractWords()))
                 .apply("Apply Windowing And Triggers",
-                        Window.<String>into(FixedWindows.of(Duration.standardMinutes(2)))
+                        Window.<String>into(FixedWindows.of(Duration.standardMinutes(5)))
                                 .triggering(AfterWatermark.pastEndOfWindow()
                                         .withEarlyFirings(AfterProcessingTime.pastFirstElementInPane()
                                                 .plusDelayOf(Duration.standardMinutes(1)))
@@ -131,21 +131,4 @@ public class TwitterWordCount {
         }
     }
 
-    private static class SetWordcountWindowMap extends DoFn<KV<String, Long>, KV<String, Long>> {
-        @ProcessElement
-        public void processElement(ProcessContext context) {
-            context.output(KV.of(context.element().getKey(), context.element().getValue()));
-        }
-    }
-
-    private static class TotalWordCount implements SerializableFunction<Iterable<Long>, Long> {
-        @Override
-        public Long apply(Iterable<Long> input) {
-            Long sum = 0L;
-            for (Long count : input) {
-                sum += count;
-            }
-            return sum;
-        }
-    }
 }
